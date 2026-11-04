@@ -1,5 +1,7 @@
 import crypto from 'crypto';
+import os from 'os';
 import path from 'path';
+import { existsSync, mkdirSync, copyFileSync, unlinkSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { KeyStorage } from './key-storage.mjs';
 import { ENCRYPTION } from '../config/constants.mjs';
@@ -23,7 +25,51 @@ export class DecryptionError extends Error {
 // --- Configuration ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const keyFilePath = path.join(__dirname, '..', '..', '.local-secret-key');
+
+// Fallback location for the AES key, used only when the OS keychain is
+// unavailable. It deliberately lives OUTSIDE the checkout: keeping the key next
+// to the encrypted token files (as this fork did up to 1.1.3) means copying the
+// project folder, zipping it, or force-adding it to a fork also hands over the
+// key — which turns the encryption into decoration.
+const legacyKeyFilePath = path.join(__dirname, '..', '..', '.local-secret-key');
+
+/**
+ * Resolves the per-user path for the fallback key file.
+ * @returns {string} Absolute path to the key file.
+ */
+function resolveKeyFilePath() {
+  if (process.env.ONENOTE_MCP_KEY_FILE) return process.env.ONENOTE_MCP_KEY_FILE;
+  if (process.platform === 'win32') {
+    const base = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    return path.join(base, 'onenote-mcp', 'encryption.key');
+  }
+  const base = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
+  return path.join(base, 'onenote-mcp', 'encryption.key');
+}
+
+const keyFilePath = resolveKeyFilePath();
+
+/**
+ * Moves a key left in the old in-repo location to the per-user directory, so
+ * existing installs keep decrypting their saved tokens after the upgrade.
+ * @returns {void}
+ */
+function migrateLegacyKeyFile() {
+  try {
+    if (!existsSync(legacyKeyFilePath) || existsSync(keyFilePath)) return;
+    mkdirSync(path.dirname(keyFilePath), { recursive: true, mode: 0o700 });
+    try {
+      copyFileSync(legacyKeyFilePath, keyFilePath, 0o600);
+    } finally {
+      // Only drop the old copy once the new one exists.
+      if (existsSync(keyFilePath)) unlinkSync(legacyKeyFilePath);
+    }
+    logger.info('Moved the local encryption key out of the project folder');
+  } catch (error) {
+    // A failure here only costs a re-login (a new key is generated); never fatal.
+    logger.warn({ err: error }, 'Could not migrate the legacy local encryption key');
+  }
+}
 
 const keyStorage = new KeyStorage(keyFilePath);
 
@@ -32,6 +78,9 @@ const keyStorage = new KeyStorage(keyFilePath);
  * @returns {Promise<Buffer>} The 32-byte encryption key.
  */
 export async function getEncryptionKey() {
+  // Move any key stranded in the checkout to the per-user directory first.
+  migrateLegacyKeyFile();
+
   // Attempt migration from file-based to keyring storage
   await keyStorage.migrate();
 

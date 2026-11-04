@@ -1,7 +1,8 @@
 // @napi-rs/keyring uses CJS exports; destructure after default import
 import keyringPkg from '@napi-rs/keyring';
 const { Entry } = keyringPkg;
-import { readFile, writeFile, unlink } from 'fs/promises';
+import { readFile, writeFile, unlink, mkdir } from 'fs/promises';
+import path from 'path';
 import { logger } from '../utils/logger.mjs';
 
 const SERVICE_NAME = 'onenote-mcp';
@@ -156,6 +157,9 @@ export class KeyStorage {
    */
   async _setKeyToFile(keyHex) {
     try {
+      // The fallback key lives outside the checkout (see encryption.mjs), so the
+      // directory may not exist yet on a fresh machine.
+      await mkdir(path.dirname(this.fallbackFilePath), { recursive: true, mode: 0o700 });
       await writeFile(this.fallbackFilePath, keyHex, { mode: 0o600 });
     } catch (error) {
       throw new Error(`Failed to write key file: ${error.message}`);

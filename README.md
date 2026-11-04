@@ -170,6 +170,12 @@ From then on:
 | OS keychain (`onenote-mcp`) | AES key                                  | Windows Credential Manager / Keychain / libsecret        |
 | MSAL token cache (OS-level) | Refresh token                            | Windows: DPAPI file · macOS: Keychain · Linux: libsecret |
 
+If no OS keychain is available at all, the AES key falls back to a file
+**outside the project**: `%LOCALAPPDATA%\onenote-mcp\encryption.key` on Windows,
+`~/.config/onenote-mcp/encryption.key` elsewhere (override with
+`ONENOTE_MCP_KEY_FILE`). It is never written into the checkout, so zipping or
+copying the project does not hand over the key.
+
 MSAL cache location per OS:
 
 - **Windows** — `%LOCALAPPDATA%\.IdentityService\msal.cache.nocae` (DPAPI,
