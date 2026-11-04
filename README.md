@@ -174,8 +174,12 @@ MSAL cache location per OS:
 - **Windows** — `%LOCALAPPDATA%\.IdentityService\msal.cache.nocae` (DPAPI,
   current user; a sibling `.lockfile` serialises cross-process access)
 - **macOS** — macOS Keychain, service `Microsoft.Developer.IdentityService`
-- **Linux** — libsecret / GNOME Keyring; a headless box without a Secret Service
-  will fall back to a non-persistent in-memory cache (login once per run)
+- **Linux** — libsecret / GNOME Keyring. The backend is loaded lazily: if
+  `libsecret-1.so.0` is missing (`sudo apt install libsecret-1-0`), the server
+  still starts and works, but keeps tokens in memory only — so you log in once
+  per process run instead of once per machine. Set
+  `ONENOTE_MCP_DISABLE_CACHE_PERSISTENCE=1` to skip the native backend on
+  purpose (useful on headless hosts and in CI).
 
 All of these are already in `.gitignore`. **Never commit them** — the token
 cache is a credential that grants standing access to your notes.

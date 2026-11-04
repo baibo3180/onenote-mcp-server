@@ -1,5 +1,4 @@
 import { DeviceCodeCredential, useIdentityPlugin } from '@azure/identity';
-import { cachePersistencePlugin } from '@azure/identity-cache-persistence';
 import { statSync, unlinkSync } from 'fs';
 import path from 'path';
 import { saveToken, saveAuthRecord, loadAuthRecord } from './token-manager.mjs';
@@ -10,7 +9,29 @@ import { logger } from '../utils/logger.mjs';
 // `tokenCachePersistenceOptions: { enabled: true }` is silently ignored (or
 // throws and falls back to an in-memory cache), so the refresh token would
 // never survive a process restart.
-useIdentityPlugin(cachePersistencePlugin);
+//
+// The plugin is imported dynamically on purpose. `@azure/identity-cache-persistence`
+// pulls in `@azure/msal-node-extensions`, which statically imports `keytar`, which
+// in turn dlopen()s the native secret store at module-evaluation time. On Linux
+// without libsecret that is `Error: libsecret-1.so.0: cannot open shared object
+// file`, thrown while the module graph is still loading — a static import here
+// kills the whole MCP server before any try/catch can run. Importing lazily keeps
+// a missing native dependency a soft failure: we simply lose cross-process silent
+// renewal and everything else keeps working.
+let cachePersistenceReady = false;
+if (process.env.ONENOTE_MCP_DISABLE_CACHE_PERSISTENCE !== '1') {
+  try {
+    const { cachePersistencePlugin } = await import('@azure/identity-cache-persistence');
+    useIdentityPlugin(cachePersistencePlugin);
+    cachePersistenceReady = true;
+  } catch (error) {
+    logger.warn(
+      { err: error },
+      'Persistent token cache plugin unavailable (missing native secret store?); ' +
+        'falling back to in-memory caching — a re-login will be needed after each restart'
+    );
+  }
+}
 
 // --- Configuration ---
 const clientId = process.env.AZURE_CLIENT_ID || AUTH_CONFIG.DEFAULT_CLIENT_ID;
@@ -168,18 +189,24 @@ export function buildCredential(extra = {}) {
     userPromptCallback: (info) => logger.warn(`Device code prompt: ${info.message}`),
     ...extra,
   };
-  try {
-    return new DeviceCodeCredential({
-      ...opts,
-      tokenCachePersistenceOptions: { enabled: true },
-    });
-  } catch (error) {
-    logger.warn(
-      { err: error },
-      'Persistent token cache unavailable, falling back to in-memory credential'
-    );
-    return new DeviceCodeCredential(opts);
+  if (cachePersistenceReady) {
+    try {
+      return new DeviceCodeCredential({
+        ...opts,
+        tokenCachePersistenceOptions: { enabled: true },
+      });
+    } catch (error) {
+      // The plugin loaded but the backend still refused to initialise (e.g. a
+      // keytar build that does not match this ABI/glibc, or a locked keyring).
+      // Degrade for the rest of the process instead of failing every call.
+      cachePersistenceReady = false;
+      logger.warn(
+        { err: error },
+        'Persistent token cache unavailable, falling back to in-memory credential'
+      );
+    }
   }
+  return new DeviceCodeCredential(opts);
 }
 
 /**
