@@ -2,6 +2,27 @@
 
 All notable changes to this fork are documented here.
 
+## 1.1.4 — 2026-11-04
+
+Security hardening. Existing logins keep working: the saved key is migrated
+automatically on first run.
+
+### Fixed
+
+- **The fallback AES key no longer lives inside the project folder.** When no OS
+  keychain was available the key was written to `<repo>/.local-secret-key`,
+  right next to the ciphertext it unlocks — so copying, zipping or force-adding
+  the project handed over both halves of the credential. It now goes to
+  `%LOCALAPPDATA%\onenote-mcp\encryption.key` (`~/.config/onenote-mcp/`
+  elsewhere, or `ONENOTE_MCP_KEY_FILE`), and a key left in the old location is
+  moved on first use.
+
+### Added
+
+- `SECURITY.md` documenting the data boundary: the only outbound hosts are
+  `login.microsoftonline.com` and `graph.microsoft.com`, credentials are never
+  committed, and notebook content is never written to disk by the server.
+
 ## 1.1.3 — 2026-11-04
 
 Fixes a startup crash on Linux. No credential format changes: an existing login
