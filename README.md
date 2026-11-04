@@ -55,6 +55,16 @@ Recommended because the session files (`.access-token.txt`, `.auth-record.txt`)
 live in the project folder. They survive restarts and `git pull`, so you stay
 logged in.
 
+> If `git clone` stalls or fails with `Connection was reset`, force HTTP/1.1 and
+> retry — GitHub over HTTP/2 is throttled on some networks:
+>
+> ```bash
+> git -c http.version=HTTP/1.1 clone https://github.com/baibo3180/onenote-mcp-server.git
+> ```
+>
+> Simply run it again if it fails once. The connection is intermittent, not
+> broken.
+
 ### Option B — run straight from GitHub
 
 ```bash
@@ -66,6 +76,11 @@ npx cache) it lands in a **different folder**, so `.auth-record.txt` is gone and
 you will be asked for a device code again. The MSAL refresh token in the OS
 token cache survives, but it is not enough on its own. Prefer Option A if you
 dislike re-authenticating.
+
+> This needs **npm itself** to reach `github.com` (it shells out to git and
+> pulls a tarball). Behind a proxy that blocks GitHub you get `E502 Bad Gateway`
+> or a silent hang. Use Option A in that case — the `git` client can be forced
+> onto HTTP/1.1 as shown above.
 
 ### Forked this repo?
 
@@ -212,6 +227,21 @@ a monospace span instead of `<code>`.
 
 The paths in your MCP config are absolute, and the account record is bound to
 the old location. Update the config path and call `authenticate` once.
+
+**`git clone` hangs, or `npx github:` ends with `E502` / never prints anything**
+
+Network, not code. Two different clients are involved:
+
+- `npx github:...` → npm does the fetching, and npm honours the proxy
+  environment. If that proxy cannot reach GitHub, you get `E502` or a silent
+  hang. Do not fight it — clone first (Option A), then `npm install` from the
+  local folder and point your MCP client at `src/server.mjs`.
+- `git clone` → force HTTP/1.1 (`git -c http.version=HTTP/1.1 clone ...`) and
+  retry on failure. If a proxy is set, unset it for the clone:
+  `env -u HTTPS_PROXY -u HTTP_PROXY git clone ...`
+
+Once the repo is on disk, nothing else needs GitHub access — `authenticate`
+talks only to `login.microsoft.com`.
 
 ---
 

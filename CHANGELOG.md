@@ -2,6 +2,21 @@
 
 All notable changes to this fork are documented here.
 
+## 1.1.2 — 2026-11-04
+
+Documentation only; no code change since 1.1.1.
+
+### Changed
+
+- README install section now separates the two network paths: `git clone`
+  (Option A) honours `http.version` and is the reliable one behind a proxy;
+  `npx github:` (Option B) makes **npm** do the fetching, so a proxy that blocks
+  GitHub yields `E502` or a silent hang.
+- Added troubleshooting for `git clone` stalls (force HTTP/1.1, retry, unset
+  proxy) and for `npx github:` failures.
+- Noted that after cloning, nothing else needs GitHub access — authentication
+  only talks to `login.microsoft.com`.
+
 ## 1.1.1 — 2026-11-04
 
 Fixes for first-run and forked copies. No credential format changes: an existing
