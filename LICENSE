@@ -1,9 +1,11 @@
 MIT License
 
 Copyright (c) 2025 Kyle Klimek
-
-This project was insipired by and derived from from onenotemcp (https://github.com/eshlon/onenotemcp)
 Copyright (c) 2025 Ehsan Shahabi
+Copyright (c) 2026 baibo3180 (modifications in this fork)
+
+This project is derived from onenotemcp (https://github.com/eshlon/onenotemcp)
+and its successor (https://github.com/IAmKSquared/onenotemcp).
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
