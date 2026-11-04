@@ -2,6 +2,30 @@
 
 All notable changes to this fork are documented here.
 
+## 1.1.3 — 2026-11-04
+
+Fixes a startup crash on Linux. No credential format changes: an existing login
+keeps working, and Windows/macOS behaviour is unchanged.
+
+### Fixed
+
+- **The server could die on startup on Linux.**
+  `@azure/identity-cache-persistence` pulls in `@azure/msal-node-extensions` →
+  `keytar`, which `dlopen()`s `libsecret-1.so.0` as soon as it is required. On a
+  host without libsecret the import threw — and on Node 20 aborted the process
+  outright — so the stdio server closed the connection on the very first tool
+  call instead of merely losing the persistent cache. The plugin is now probed
+  in a throwaway child process and only loaded when that probe succeeds;
+  otherwise the server runs with an in-memory cache and asks for a login once
+  per process run.
+
+### Added
+
+- `ONENOTE_MCP_DISABLE_CACHE_PERSISTENCE=1` skips the native backend on purpose
+  (useful on headless hosts and in CI).
+- GitHub Actions CI: `npm run quality` (lint, prettier, tests) on Node 20, 22
+  and 24, with lint/format/test as separate steps.
+
 ## 1.1.2 — 2026-11-04
 
 Documentation only; no code change since 1.1.1.
