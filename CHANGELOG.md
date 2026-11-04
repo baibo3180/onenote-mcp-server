@@ -2,6 +2,36 @@
 
 All notable changes to this fork are documented here.
 
+## 1.1.1 — 2026-11-04
+
+Fixes for first-run and forked copies. No credential format changes: an existing
+login keeps working.
+
+### Fixed
+
+- **The first tool call could hang for up to 15 minutes.** With no saved login,
+  the renewal `DeviceCodeCredential` fell back to an interactive device-code
+  flow _inside_ the tool call, waiting for a login the user never saw. Renewal
+  is now created with `disableAutomaticAuthentication: true`, so it fails fast
+  and the tool returns `Authentication Required` in milliseconds instead.
+- **The device-code prompt was printed to stdout**, which corrupts the MCP
+  JSON-RPC stream and makes clients report a broken or hung server. The SDK
+  prompt is now redirected to stderr; the real code is delivered by the
+  `authenticate` tool.
+- **A transient renewal failure broke every request.** The Graph `authProvider`
+  now falls back to the access token already held in memory instead of failing
+  the call outright.
+- **LICENSE was not detected as MIT** because a fork-attribution paragraph was
+  inserted in the middle of the licence text. It is verbatim MIT again; the
+  attribution lives in the README credits.
+
+### Changed
+
+- README: added a "Forked this repo?" section (which three files name the
+  original owner), per-OS credential locations, and a troubleshooting entry for
+  the first-call hang.
+- `.gitignore`: a trailing comment made the `!.env.example` rule ineffective.
+
 ## 1.1.0 — 2026-11-04
 
 Fork of [IAmKSquared/onenotemcp](https://github.com/IAmKSquared/onenotemcp) with
@@ -35,7 +65,8 @@ fixes for authentication persistence and packaging.
 
 - Server version reported over MCP now comes from `package.json` instead of a
   hardcoded string.
-- Added a `bin` entry (`onenote-mcp`), so `npx github:baibo3180/onenote-mcp-server` works.
+- Added a `bin` entry (`onenote-mcp`), so
+  `npx github:baibo3180/onenote-mcp-server` works.
 - Standardised on npm: removed the pnpm lock/workspace files, regenerated
   `package-lock.json`.
 - `.gitignore` now also covers `.auth-record.txt`, token backups and local

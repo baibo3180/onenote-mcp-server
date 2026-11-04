@@ -159,7 +159,15 @@ export async function authenticateWithDeviceCode(session) {
 export function buildCredential(extra = {}) {
   // Recover from an orphaned lock BEFORE the plugin tries to read the cache.
   clearStaleCacheLock();
-  const opts = { clientId, ...extra };
+  const opts = {
+    clientId,
+    // Never let the SDK print the device-code prompt to stdout. This process is
+    // an MCP server and stdout carries the JSON-RPC stream: a stray line there
+    // corrupts the protocol and the client reports a broken/hung server. The
+    // real prompt is delivered by the `authenticate` tool instead.
+    userPromptCallback: (info) => logger.warn(`Device code prompt: ${info.message}`),
+    ...extra,
+  };
   try {
     return new DeviceCodeCredential({
       ...opts,
@@ -187,7 +195,17 @@ export async function createCredential(extra = {}) {
   // unresolved Promise as `authenticationRecord` would silently produce an
   // account object with undefined fields and break silent renewal.
   const record = await loadAuthRecord();
-  const opts = record ? { authenticationRecord: record, ...extra } : { ...extra };
+  const opts = {
+    // Silent-only. A DeviceCodeCredential normally falls back to the interactive
+    // device-code flow whenever the cached refresh token cannot be used. In a
+    // stdio MCP server that fallback is poison: the very first tool call on a
+    // fresh install would block for up to 15 minutes waiting for a login the
+    // user cannot see. With this flag `getToken()` fails fast instead, and the
+    // tool returns the "please authenticate first" message.
+    disableAutomaticAuthentication: true,
+    ...(record ? { authenticationRecord: record } : {}),
+    ...extra,
+  };
   return buildCredential(opts);
 }
 

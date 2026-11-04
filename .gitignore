@@ -22,7 +22,7 @@ _*.cjs
 .env
 .env*.local
 .env.*.local
-!.env.example # If you create an example env file, don't ignore it
+!.env.example
 
 # Operating System generated files
 .DS_Store

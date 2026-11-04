@@ -125,6 +125,14 @@ export class OneNoteSession {
             }
             return done(new Error('No access token available'), null);
           } catch (err) {
+            // Silent renewal can fail (no account record yet, revoked refresh
+            // token, network down). Fall back to the token we already have so a
+            // transient renewal problem does not break every request; Graph
+            // will answer 401 if that token is actually expired.
+            if (this.accessToken) {
+              logger.warn({ err }, 'Silent renewal failed; using existing access token');
+              return done(null, this.accessToken);
+            }
             logger.error({ err }, 'authProvider failed to acquire token');
             return done(err, null);
           }

@@ -16,14 +16,16 @@ plumbing so **you authenticate once per machine, not once per hour**.
 
 ## What this fork changes
 
-| Change                                                                  | Why it matters                                                                                                       |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Persistent MSAL cache actually enabled (`tokenCachePersistenceOptions`) | Upstream passed a wrong field name and never registered the cache plugin, so the refresh token died with the process |
-| `AuthenticationRecord` persisted (AES-256-GCM) and reloaded on startup  | A brand-new process can renew silently instead of prompting for a device code                                        |
-| `createCredential()` is async and awaited                               | It used to pass an unresolved `Promise` as the account record → silent renewal broke                                 |
-| Stale cache-lock cleanup (30s threshold)                                | A crash while holding MSAL's lock file used to degrade every later renewal into a device-code prompt                 |
-| `npm install` no longer runs `husky` via `prepare`                      | `npm install` failed outright in a folder without `.git` (e.g. ZIP download)                                         |
-| Troubleshooting docs for device-code loops and the OneNote freeze bug   | Saves hours of debugging                                                                                             |
+| Change                                                                   | Why it matters                                                                                                       |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Persistent MSAL cache actually enabled (`tokenCachePersistenceOptions`)  | Upstream passed a wrong field name and never registered the cache plugin, so the refresh token died with the process |
+| `AuthenticationRecord` persisted (AES-256-GCM) and reloaded on startup   | A brand-new process can renew silently instead of prompting for a device code                                        |
+| `createCredential()` is async and awaited                                | It used to pass an unresolved `Promise` as the account record → silent renewal broke                                 |
+| Stale cache-lock cleanup (30s threshold)                                 | A crash while holding MSAL's lock file used to degrade every later renewal into a device-code prompt                 |
+| Renewal credential is **silent-only** (`disableAutomaticAuthentication`) | On a fresh install the first tool call used to block for up to 15 minutes waiting for a login you never saw          |
+| Device-code prompt is forced to **stderr**                               | The SDK printed it to stdout, which corrupts the MCP JSON-RPC stream and makes the client report a hung server       |
+| `npm install` no longer runs `husky` via `prepare`                       | `npm install` failed outright in a folder without `.git` (e.g. ZIP download)                                         |
+| Troubleshooting docs for device-code loops and the OneNote freeze bug    | Saves hours of debugging                                                                                             |
 
 Measured on Windows 11 / Node 22: cold process, expired access token, 24
 concurrent renewals — zero prompts, and the refresh token rotates on disk each
@@ -61,9 +63,39 @@ npx -y github:baibo3180/onenote-mcp-server
 
 Zero install, but every time npm re-fetches the repository (new commit, cleared
 npx cache) it lands in a **different folder**, so `.auth-record.txt` is gone and
-you will be asked for a device code again. The MSAL refresh token in
-`%LOCALAPPDATA%` survives, but it is not enough on its own. Prefer Option A if
-you dislike re-authenticating.
+you will be asked for a device code again. The MSAL refresh token in the OS
+token cache survives, but it is not enough on its own. Prefer Option A if you
+dislike re-authenticating.
+
+### Forked this repo?
+
+Everything is relative to the checkout, so a fork behaves exactly like the
+original — no code references this repository's URL. Only the docs and
+`package.json` names point at the original owner, so after forking, replace
+`baibo3180` with your username in:
+
+| File           | What                                                               |
+| -------------- | ------------------------------------------------------------------ |
+| `README.md`    | clone URL, `npx github:` example, the Windows `cmd /c npx` snippet |
+| `package.json` | `repository.url`, `bugs.url`, `homepage`                           |
+| `CHANGELOG.md` | the `npx github:` line (cosmetic)                                  |
+
+```bash
+git clone https://github.com/<your-user>/onenote-mcp-server.git
+cd onenote-mcp-server
+npm install
+```
+
+Two things stay per-machine, not per-repo, so a fork is not "shared login":
+
+- `<repo>/.access-token.txt` and `<repo>/.auth-record.txt` live **inside the
+  checkout** — every clone/fork needs one `authenticate` on first run.
+- The MSAL refresh token lives in the OS cache (Windows DPAPI, macOS Keychain,
+  Linux libsecret). It is scoped to your OS user, so it never travels with a
+  fork.
+
+Both are already in `.gitignore`; a fork will not carry your credentials, and
+your fork will not leak them either.
 
 ---
 
@@ -115,12 +147,20 @@ From then on:
 
 ### Where credentials live
 
-| File                                               | Purpose                                  | Protection                                        |
-| -------------------------------------------------- | ---------------------------------------- | ------------------------------------------------- |
-| `<repo>/.access-token.txt`                         | Current access token + metadata          | AES-256-GCM                                       |
-| `<repo>/.auth-record.txt`                          | Account record needed for silent renewal | AES-256-GCM                                       |
-| OS keychain (`onenote-mcp` service)                | AES key                                  | Windows Credential Manager / Keychain / libsecret |
-| `%LOCALAPPDATA%\.IdentityService\msal.cache.nocae` | MSAL cache (refresh token)               | Windows DPAPI, current user                       |
+| File                        | Purpose                                  | Protection                                               |
+| --------------------------- | ---------------------------------------- | -------------------------------------------------------- |
+| `<repo>/.access-token.txt`  | Current access token + metadata          | AES-256-GCM                                              |
+| `<repo>/.auth-record.txt`   | Account record needed for silent renewal | AES-256-GCM                                              |
+| OS keychain (`onenote-mcp`) | AES key                                  | Windows Credential Manager / Keychain / libsecret        |
+| MSAL token cache (OS-level) | Refresh token                            | Windows: DPAPI file · macOS: Keychain · Linux: libsecret |
+
+MSAL cache location per OS:
+
+- **Windows** — `%LOCALAPPDATA%\.IdentityService\msal.cache.nocae` (DPAPI,
+  current user; a sibling `.lockfile` serialises cross-process access)
+- **macOS** — macOS Keychain, service `Microsoft.Developer.IdentityService`
+- **Linux** — libsecret / GNOME Keyring; a headless box without a Secret Service
+  will fall back to a non-persistent in-memory cache (login once per run)
 
 All of these are already in `.gitignore`. **Never commit them** — the token
 cache is a credential that grants standing access to your notes.
@@ -128,6 +168,17 @@ cache is a credential that grants standing access to your notes.
 ---
 
 ## Troubleshooting
+
+**The first tool call hangs, or the client says the server is unresponsive**
+
+Fixed in 1.1.1. On a fresh install with no saved login, the renewal credential
+used to start an interactive device-code flow inside the tool call — blocking up
+to 15 minutes and printing the prompt to **stdout**, which corrupts the MCP
+stream. Renewal is now silent-only: you get an instant `Authentication Required`
+message telling you to run `authenticate`.
+
+If you are on 1.1.0 or earlier, call `authenticate` before any other tool, or
+upgrade.
 
 **Asked for a device code again, even though I logged in before**
 
