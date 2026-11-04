@@ -1,6 +1,8 @@
 import { DeviceCodeCredential, useIdentityPlugin } from '@azure/identity';
 import { statSync, unlinkSync } from 'fs';
+import { spawnSync } from 'child_process';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { saveToken, saveAuthRecord, loadAuthRecord } from './token-manager.mjs';
 import { TIMEOUTS, AUTH_CONFIG } from '../config/constants.mjs';
 import { logger } from '../utils/logger.mjs';
@@ -10,25 +12,58 @@ import { logger } from '../utils/logger.mjs';
 // throws and falls back to an in-memory cache), so the refresh token would
 // never survive a process restart.
 //
-// The plugin is imported dynamically on purpose. `@azure/identity-cache-persistence`
-// pulls in `@azure/msal-node-extensions`, which statically imports `keytar`, which
-// in turn dlopen()s the native secret store at module-evaluation time. On Linux
-// without libsecret that is `Error: libsecret-1.so.0: cannot open shared object
-// file`, thrown while the module graph is still loading — a static import here
-// kills the whole MCP server before any try/catch can run. Importing lazily keeps
-// a missing native dependency a soft failure: we simply lose cross-process silent
-// renewal and everything else keeps working.
+// The plugin is loaded defensively because `@azure/identity-cache-persistence`
+// pulls in `@azure/msal-node-extensions` → `keytar`, and `keytar` dlopen()s the
+// native secret store as soon as it is required. On Linux without libsecret that
+// dlopen fails, and on some Node versions the failure aborts the whole process
+// instead of raising a catchable error — a static import here therefore kills the
+// MCP server at startup ("Connection closed" on the first tool call).
+//
+// So on Linux the backend is probed in a throwaway child process first: if that
+// child cannot load it, this process never touches the native module, keeps
+// running, and simply loses cross-process silent renewal. Everything else
+// (tools, in-process renewal, the encrypted .auth-record.txt) still works.
+const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/**
+ * Checks whether the native secret store backing the MSAL cache can be loaded on
+ * this machine, without risking the current process.
+ * @returns {boolean} True when the persistent cache plugin can be used safely.
+ */
+function canUseNativeSecretStore() {
+  if (process.platform !== 'linux') return true;
+  // A child that dies is still just a non-zero status here, so a fatal dlopen
+  // failure stays contained.
+  const probe = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      'import("@azure/identity-cache-persistence").then(() => process.exit(0), () => process.exit(1));',
+    ],
+    { cwd: packageRoot, stdio: 'ignore', timeout: 20000 }
+  );
+  return probe.status === 0;
+}
+
 let cachePersistenceReady = false;
 if (process.env.ONENOTE_MCP_DISABLE_CACHE_PERSISTENCE !== '1') {
-  try {
-    const { cachePersistencePlugin } = await import('@azure/identity-cache-persistence');
-    useIdentityPlugin(cachePersistencePlugin);
-    cachePersistenceReady = true;
-  } catch (error) {
+  if (canUseNativeSecretStore()) {
+    try {
+      const { cachePersistencePlugin } = await import('@azure/identity-cache-persistence');
+      useIdentityPlugin(cachePersistencePlugin);
+      cachePersistenceReady = true;
+    } catch (error) {
+      logger.warn(
+        { err: error },
+        'Persistent token cache plugin unavailable (missing native secret store?); ' +
+          'falling back to in-memory caching — a re-login will be needed after each restart'
+      );
+    }
+  } else {
     logger.warn(
-      { err: error },
-      'Persistent token cache plugin unavailable (missing native secret store?); ' +
-        'falling back to in-memory caching — a re-login will be needed after each restart'
+      'Native secret store unavailable on this host (Linux without libsecret?); ' +
+        'using an in-memory token cache — a re-login will be needed after each restart. ' +
+        'Install libsecret (e.g. `apt install libsecret-1-0`) to enable persistent caching.'
     );
   }
 }
