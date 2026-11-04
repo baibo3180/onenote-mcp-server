@@ -1,0 +1,46 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Project-specific files
+# CRITICAL: Contains sensitive authentication token
+.access-token.txt
+.access-token.txt.bak*
+# Account record used for silent token renewal (contains account identifiers)
+.auth-record.txt
+.auth-record.txt.bak*
+*.log
+
+# Local scratch scripts created during setup / debugging
+_*.mjs
+_*.cjs
+
+# Environment variables
+*.env
+.env
+.env*.local
+.env.*.local
+!.env.example # If you create an example env file, don't ignore it
+
+# Operating System generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE / Editor specific
+.idea/
+.vscode/
+*.swp
+*~
+.local-secret-key
+
+# Local Claude Code Configuration
+.claude/settings.local.json
+.claude/agents/
+.claude/commands/

@@ -1,0 +1,257 @@
+# OneNote MCP Server — fork with truly persistent login
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
+
+An MCP (Model Context Protocol) server that lets an AI assistant read, search,
+write and edit your Microsoft OneNote notebooks over Microsoft Graph — 25 tools
+covering notebooks, sections, section groups and pages.
+
+This is a fork of
+[IAmKSquared/onenotemcp](https://github.com/IAmKSquared/onenotemcp) (MIT).
+Upstream asks for a device-code login far too often; this fork fixes the token
+plumbing so **you authenticate once per machine, not once per hour**.
+
+---
+
+## What this fork changes
+
+| Change                                                                  | Why it matters                                                                                                       |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Persistent MSAL cache actually enabled (`tokenCachePersistenceOptions`) | Upstream passed a wrong field name and never registered the cache plugin, so the refresh token died with the process |
+| `AuthenticationRecord` persisted (AES-256-GCM) and reloaded on startup  | A brand-new process can renew silently instead of prompting for a device code                                        |
+| `createCredential()` is async and awaited                               | It used to pass an unresolved `Promise` as the account record → silent renewal broke                                 |
+| Stale cache-lock cleanup (30s threshold)                                | A crash while holding MSAL's lock file used to degrade every later renewal into a device-code prompt                 |
+| `npm install` no longer runs `husky` via `prepare`                      | `npm install` failed outright in a folder without `.git` (e.g. ZIP download)                                         |
+| Troubleshooting docs for device-code loops and the OneNote freeze bug   | Saves hours of debugging                                                                                             |
+
+Measured on Windows 11 / Node 22: cold process, expired access token, 24
+concurrent renewals — zero prompts, and the refresh token rotates on disk each
+time (rolling 90-day lifetime).
+
+---
+
+## Requirements
+
+- **Node.js ≥ 20**
+- A Microsoft account with OneNote (personal or work/school)
+- No Azure subscription needed for a quick test (see [Client ID](#client-id))
+
+---
+
+## Installation
+
+### Option A — clone (recommended)
+
+```bash
+git clone https://github.com/baibo3180/onenote-mcp-server.git
+cd onenote-mcp-server
+npm install
+```
+
+Recommended because the session files (`.access-token.txt`, `.auth-record.txt`)
+live in the project folder. They survive restarts and `git pull`, so you stay
+logged in.
+
+### Option B — run straight from GitHub
+
+```bash
+npx -y github:baibo3180/onenote-mcp-server
+```
+
+Zero install, but every time npm re-fetches the repository (new commit, cleared
+npx cache) it lands in a **different folder**, so `.auth-record.txt` is gone and
+you will be asked for a device code again. The MSAL refresh token in
+`%LOCALAPPDATA%` survives, but it is not enough on its own. Prefer Option A if
+you dislike re-authenticating.
+
+---
+
+## Connect your MCP client
+
+Add this to your client's MCP configuration (Trae, Claude Desktop, Cursor, …):
+
+```json
+{
+  "mcpServers": {
+    "onenote": {
+      "command": "node",
+      "args": ["/absolute/path/to/REPO/src/server.mjs"],
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- Use an **absolute** path to `src/server.mjs`.
+- `NODE_ENV=production` keeps structured logs on stderr (stdout stays clean for
+  the MCP protocol).
+- On Windows some clients cannot spawn `.cmd` shims. If you use the `npx` route,
+  set `"command": "cmd"` and
+  `"args": ["/c", "npx", "-y", "github:baibo3180/onenote-mcp-server"]`.
+- Optional environment variables: `AZURE_CLIENT_ID`, `LOG_LEVEL`.
+
+---
+
+## First-time authentication (once per machine)
+
+1. Restart your MCP client so it loads the new server.
+2. Call the **`authenticate`** tool.
+3. It returns a device code and a URL. Open <https://microsoft.com/devicelogin>,
+   enter the code and sign in with the account that owns your OneNote notebooks.
+4. Call **`listNotebooks`** — you should see your notebooks.
+
+From then on:
+
+- the **access token** (~1 hour) is renewed silently before it expires;
+- the **refresh token** is rotated and written back on every use, so its rolling
+  90-day window keeps moving as long as you use the server;
+- a new process (app restart, reboot, client switch) renews silently — no device
+  code.
+
+### Where credentials live
+
+| File                                               | Purpose                                  | Protection                                        |
+| -------------------------------------------------- | ---------------------------------------- | ------------------------------------------------- |
+| `<repo>/.access-token.txt`                         | Current access token + metadata          | AES-256-GCM                                       |
+| `<repo>/.auth-record.txt`                          | Account record needed for silent renewal | AES-256-GCM                                       |
+| OS keychain (`onenote-mcp` service)                | AES key                                  | Windows Credential Manager / Keychain / libsecret |
+| `%LOCALAPPDATA%\.IdentityService\msal.cache.nocae` | MSAL cache (refresh token)               | Windows DPAPI, current user                       |
+
+All of these are already in `.gitignore`. **Never commit them** — the token
+cache is a credential that grants standing access to your notes.
+
+---
+
+## Troubleshooting
+
+**Asked for a device code again, even though I logged in before**
+
+In order of likelihood:
+
+1. A crash left `msal.cache.nocae.lockfile` behind. This fork deletes locks
+   older than 30 seconds automatically; if you are on a build without that fix,
+   delete the file manually.
+2. The cache or the account record was deleted (`msal.cache.nocae`,
+   `.auth-record.txt`), or you cleared Windows Credential Manager.
+3. More than 90 days without using the server (documented refresh-token
+   lifetime), or you revoked the app at
+   <https://account.live.com/consent/Manage>.
+4. You ran it through `npx` and npm re-downloaded the repo (see Option B).
+
+Re-running `authenticate` is the fix in every case.
+
+**`No access token available. Please authenticate first...`**
+
+Nothing to renew from. Call `authenticate` once.
+
+**OneNote desktop freezes when I click a code block on a page the server wrote**
+
+OneNote converts every newline inside `<pre>` / `<code>` into an object
+placeholder character (`U+FFFC`). Pages containing them can make the desktop
+client hang. When generating page HTML, write code as **one `<p>` per line**
+with a monospace `<span>` (e.g. `font-family:Consolas`), and put inline code in
+a monospace span instead of `<code>`.
+
+**Everything worked, then stopped after I moved the folder**
+
+The paths in your MCP config are absolute, and the account record is bound to
+the old location. Update the config path and call `authenticate` once.
+
+---
+
+## Client ID
+
+Out of the box the server uses Microsoft Graph Explorer's public client ID. It
+is fine for trying things out, but it is shared by many apps and not something
+you should rely on long-term.
+
+For regular use, register your own app in
+[Microsoft Entra admin center](https://entra.microsoft.com):
+
+1. **App registrations → New registration**
+2. Supported account types: **Accounts in any organizational directory and
+   personal Microsoft accounts**
+3. **Authentication → Allow public client flows: Yes**
+4. Copy the _Application (client) ID_ and set `AZURE_CLIENT_ID` in your MCP
+   config's `env` block.
+
+Delegated permissions used: `Notes.Read`, `Notes.ReadWrite`, `Notes.Create`,
+`User.Read` (`offline_access` is added implicitly).
+
+---
+
+## Available tools (25)
+
+- **Auth:** `authenticate`, `saveAccessToken`
+- **Read:** `listNotebooks`, `listSections`, `listSectionGroups`,
+  `searchSections`, `listPagesInSection`, `searchPages`, `getRecentPages`,
+  `getPageContent`, `getPageByTitle`, `getPageLink`
+- **Create:** `createNotebook`, `createSection`, `createSectionGroup`,
+  `createPage`, `createPageInSection`
+- **Write:** `updatePageContent`, `appendToPage`, `updatePageTitle`,
+  `replaceTextInPage`, `addNoteToPage`, `addTableToPage`
+- **Delete / copy:** `deletePage`, `copyPage`
+
+Full parameter-level reference:
+[`docs/UPSTREAM_README.md`](docs/UPSTREAM_README.md).
+
+---
+
+## Development
+
+```bash
+npm install
+npm run quality        # eslint + prettier --check + all tests
+npm run husky:init     # optional: install git hooks
+```
+
+Tests do not need a Microsoft account; they mock Graph.
+
+---
+
+## Security notes
+
+- The server runs locally over stdio and only talks to `graph.microsoft.com`.
+- Token files are encrypted with a key held in the OS keychain; the MSAL cache
+  is protected by DPAPI (Windows) / Keychain (macOS) / libsecret (Linux).
+- Credentials are per-user and per-machine. Copying the project folder to
+  another PC does **not** carry the login over.
+- Revoke access at <https://account.live.com/consent/Manage> (personal accounts)
+  or in Entra ID (work accounts) if you ever suspect exposure.
+
+---
+
+## Credits & license
+
+MIT — see [LICENSE](LICENSE).
+
+- Original project:
+  [IAmKSquared/onenotemcp](https://github.com/IAmKSquared/onenotemcp) by Kyle
+  Klimek.
+- That project was in turn derived from
+  [eshlon/onenotemcp](https://github.com/eshlon/onenotemcp).
+- This fork adds persistent authentication, the stale-lock guard and the
+  packaging fixes described above.
+
+Not affiliated with or endorsed by Microsoft. OneNote and Microsoft Graph are
+trademarks of Microsoft Corporation.
+
+---
+
+## 中文快速开始
+
+1. 安装：`git clone https://github.com/baibo3180/onenote-mcp-server.git` →
+   `cd onenote-mcp-server` → `npm install` （需要 Node ≥ 20）。
+2. 在你的 MCP 客户端里加配置，`command` 用 `node`，`args` 填
+   `<仓库绝对路径>/src/server.mjs`，`env` 里加 `NODE_ENV=production`。
+3. 重启客户端，调用 `authenticate` 工具，按返回的设备码到
+   <https://microsoft.com/devicelogin> 登录。
+4. 再调用 `listNotebooks` 验证。之后同一台机器上会自动静默续期，不用反复登录。
+
+注意：`npx github:...`
+每次重新拉取都会换目录，需要重新授权一次；想长期免登录请用上面的 clone 方式。
