@@ -50,18 +50,41 @@ const collectTracked = () => {
   }
 };
 
-// ZIP installs have no .git, so fall back to a directory walk.
+// ZIP installs have no .git, so fall back to a directory walk. Only project
+// source/doc files are considered: generated logs can legitimately contain the
+// machine's own absolute paths and must not turn into false positives.
+const sourceExtensions = [
+  '.mjs',
+  '.cjs',
+  '.js',
+  '.json',
+  '.md',
+  '.yml',
+  '.yaml',
+  '.txt',
+  '.html',
+  '.sh',
+  '.py',
+];
+const sourceNames = ['LICENSE', '.gitignore', '.gitattributes', '.prettierignore'];
+
 const walk = (dir, acc = []) => {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (['node_modules', '.git', 'coverage', 'dist'].includes(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) walk(full, acc);
-    else if (entry.isFile()) acc.push(path.relative(repoRoot, full).split(path.sep).join('/'));
+    else if (
+      entry.isFile() &&
+      (sourceExtensions.includes(path.extname(entry.name).toLowerCase()) ||
+        sourceNames.includes(entry.name))
+    ) {
+      acc.push(path.relative(repoRoot, full).split(path.sep).join('/'));
+    }
   }
   return acc;
 };
 
-test('tracked files contain no personal identifiers or credentials', () => {
+test('repository files contain no personal identifiers or credentials', () => {
   const tracked = collectTracked();
   const files = tracked.length ? tracked : walk(repoRoot);
   const findings = [];
