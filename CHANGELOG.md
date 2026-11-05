@@ -2,6 +2,56 @@
 
 All notable changes to this fork are documented here.
 
+## 1.1.5 — 2026-11-05
+
+Correctness and reliability fixes found while verifying user feedback. No
+credential format changes: an existing login keeps working.
+
+### Fixed
+
+- **Markdown links could inject HTML attributes.** `textToHtml()` put a
+  `sanitizeUrl()` result straight into `href="..."` without escaping quotes, so
+  `[x](https://example.com/" onmouseover="alert(1))` produced an extra
+  `onmouseover` attribute on pages written by every write tool. URLs are now
+  decoded, validated and escaped for a double-quoted attribute. `sanitizeUrl()`
+  also blocks protocol-relative URLs (`//evil.com`), control-character and
+  HTML-entity obfuscation of forbidden schemes.
+- **Multi-line fenced code blocks produced invalid HTML.** Each code line was
+  wrapped in `<p>` _inside_ `<pre><code>`, and the fence language (`bash`) was
+  rendered as the first line of code. Blocks are now extracted before any
+  line-based processing, newlines become `<br>` (OneNote's importer turns raw
+  CR/LF inside `<pre>` into U+FFFC), and the language token is consumed rather
+  than printed.
+- **Nested `<p>` in headings, table cells and notes.** New `textToInlineHtml()`
+  renders inline markup without block wrappers; it is used for page titles,
+  table headings/cells and note bodies. A preserved page title is no longer
+  emitted as `<h1><p>…</p></h1>`, which confused OneNote's title detection.
+- **An unhandled promise rejection killed the server before `initialize`.**
+  `main()` had no `.catch()` and there were no process-level handlers. Startup
+  failures now produce a fatal log on stderr and a clean exit, while a stray
+  background rejection is logged and the live stdio connection is kept.
+- **The startup banner undercounted the tools.** It listed 22 hand-written names
+  (7 read, 6 edit) while the server actually exposes 25 (10 read, 7 edit, with
+  `copyPage` registered in the edit module). The banner is now derived from the
+  real registration catalog, so it cannot drift again.
+
+### Added
+
+- `escapeHtmlAttribute()` and `textToInlineHtml()` exports, plus regression
+  tests for URL injection, code blocks and inline rendering.
+- `test/test_startup.mjs`: spawns the real server over raw stdio JSON-RPC and
+  verifies both a clean `initialize` and survival of an injected unhandled
+  rejection. Wired into `npm test` (`test:startup`).
+
+### Docs
+
+- The install checklist's "keytar 加载钩子" section referenced three
+  `scripts/*.mjs` files that do not exist in this repository and mixed in
+  hard-coded paths from another machine; it has been replaced with the real
+  v1.1.3+ behaviour (automatic native-backend probe, in-memory fallback).
+- Shell examples now show both PowerShell and Bash forms, and the tool count
+  breakdown matches the real catalog.
+
 ## 1.1.4 — 2026-11-04
 
 Security hardening. Existing logins keep working: the saved key is migrated

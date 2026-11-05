@@ -3,6 +3,10 @@
  * Extracted for testing and reusability
  */
 
+/* eslint-disable no-control-regex -- ASCII control characters are exactly what
+   this module must filter (URL smuggling, HTML attribute breakout) and the
+   NUL-delimited code-block placeholders are deliberately unforgeable. */
+
 import { JSDOM } from 'jsdom';
 import { VALIDATION, CACHE_CONFIG, DISPLAY_LIMITS } from '../config/constants.mjs';
 import { logger } from './logger.mjs';
@@ -32,19 +36,104 @@ export function escapeHtml(text) {
 }
 
 /**
- * Validates URL safety and prevents javascript: protocol injection
+ * Escapes a value for use inside a double-quoted HTML attribute.
+ * Unlike escapeHtml this also neutralises quotes and backticks, which would
+ * otherwise let an attacker close href="..." and inject extra attributes.
+ * Control characters are dropped because HTML parsers ignore or normalise them
+ * in ways that can hide a forbidden scheme.
+ * @param {string} value - The raw attribute value.
+ * @returns {string} The escaped value, safe inside a double-quoted attribute.
+ */
+export function escapeHtmlAttribute(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/`/g, '&#96;')
+    .replace(/[\u0000-\u001f\u007f]/g, '');
+}
+
+/**
+ * Decodes only the entities produced by our own escaping pass. Used to recover
+ * the original URL before it is validated and re-escaped for an attribute.
+ * A single-pass alternation keeps "&amp;lt;" as the literal text "&lt;".
+ * @param {string} value - Escaped text.
+ * @returns {string} Decoded text.
+ */
+function decodeEscapedHtml(value) {
+  const entities = { '&amp;': '&', '&lt;': '<', '&gt;': '>' };
+  return value.replace(/&(?:amp|lt|gt);/gi, (entity) => entities[entity.toLowerCase()] || entity);
+}
+
+/**
+ * Turns HTML character references back into characters for scheme detection.
+ * Browsers decode entities in attribute values, so "java&#115;cript:" must not
+ * be mistaken for a harmless relative URL.
+ * @param {string} value - Raw URL.
+ * @returns {string} URL with character references expanded.
+ */
+function decodeUrlEntities(value) {
+  const named = {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    colon: ':',
+    sol: '/',
+    tab: '\t',
+    newline: '\n',
+  };
+  return value
+    .replace(/&#x([0-9a-f]+);?/gi, (match, hex) => codePointToString(parseInt(hex, 16)))
+    .replace(/&#(\d+);?/gi, (match, dec) => codePointToString(Number(dec)))
+    .replace(/&([a-z]+);/gi, (match, name) => named[name.toLowerCase()] ?? match)
+    .replace(/[\u200b-\u200f\u2028\u2029\u2060\ufeff]/g, '');
+}
+
+/**
+ * Safely converts a numeric character reference to a character.
+ * @param {number} value - Code point value.
+ * @returns {string} The character, or '' when the value is out of range.
+ */
+function codePointToString(value) {
+  if (!Number.isFinite(value) || value < 0 || value > 0x10ffff) return '';
+  try {
+    return String.fromCodePoint(value);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Validates URL safety and prevents javascript: protocol injection.
+ * Only http(s), mailto: and onenote: schemes are allowed; relative paths and
+ * fragment links are allowed, protocol-relative URLs are not. The returned
+ * value is still RAW — callers that put it in an attribute must run it through
+ * escapeHtmlAttribute().
  * @param {string} url - The URL to sanitize
  * @returns {string} Safe URL or '#' if unsafe
  */
 export function sanitizeUrl(url) {
-  if (!url) return '#';
-  // Allow standard web protocols plus onenote: for OneNote app deep links
-  const safeProtocols = /^(https?:\/\/|mailto:|onenote:)/i;
-  const hasProtocol = /^[a-z][a-z0-9+.-]*:/i.test(url.trim());
-  if (hasProtocol && !safeProtocols.test(url.trim())) {
+  if (!url || typeof url !== 'string') return '#';
+
+  // Control characters are invisible and are a classic way to smuggle a scheme
+  // past a /^scheme:/ check (e.g. "java\tscript:").
+  const cleaned = url.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  if (!cleaned) return '#';
+
+  // "//evil.com" (and backslash variants) silently escape the origin.
+  if (/^[/\\]{2}/.test(cleaned)) return '#';
+
+  const probe = decodeUrlEntities(cleaned);
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(probe);
+  if (scheme && !/^(https?|mailto|onenote)$/i.test(scheme[1])) {
     return '#';
   }
-  return url.trim();
+  return cleaned;
 }
 
 /**
@@ -201,50 +290,108 @@ export function extractReadableText(html) {
 }
 
 /**
+ * Escapes the three characters that can break out of an HTML text node.
+ * @param {string} value - Raw text.
+ * @returns {string} Escaped text.
+ */
+function escapeTextNode(value) {
+  return String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
+ * Applies inline markdown to already-escaped text: inline code, bold, italic
+ * and links. URLs are decoded back to their raw form, validated and escaped for
+ * a double-quoted attribute before being interpolated into href.
+ * @param {string} escaped - Escaped text.
+ * @returns {string} HTML with inline markup.
+ */
+function applyInlineMarkdown(escaped) {
+  return escaped
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/__(.*?)__/g, '<strong>$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em>$1</em>')
+    .replace(/_(.*?)_/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, linkText, escapedUrl) => {
+      const safeUrl = sanitizeUrl(decodeEscapedHtml(escapedUrl));
+      return `<a href="${escapeHtmlAttribute(safeUrl)}">${linkText}</a>`;
+    });
+}
+
+/**
+ * Converts short text to inline HTML without block wrappers.
+ * Use this for values that are placed inside an existing element such as a
+ * heading, table cell or paragraph — textToHtml() would nest a &lt;p&gt; there.
+ * @param {string} text - The plain text to convert.
+ * @returns {string} Inline HTML with no block-level tags.
+ */
+export function textToInlineHtml(text) {
+  if (!text) return '';
+  return applyInlineMarkdown(escapeTextNode(String(text).replace(/\r?\n/g, ' ')));
+}
+
+// Placeholders are NUL-delimited so no markdown rule can rewrite them. Control
+// characters are stripped from the input first, so a user cannot forge one.
+const CODE_BLOCK_TOKEN = /^\u0000CODEBLOCK(\d+)\u0000$/;
+const BLOCK_TAG = /^<\/?(h[1-6]|li|ul|ol|hr|blockquote|pre|div|table)(\s|\/|>)/i;
+
+/**
  * Converts plain text (with simple markdown) to HTML.
  * Supports markdown features: code blocks, inline code, headers, bold, italic,
  * links, horizontal rules, blockquotes, and lists.
+ * Fenced code blocks are extracted before any line-based processing so their
+ * lines can never be wrapped in &lt;p&gt; (which produced invalid
+ * &lt;pre&gt;&lt;code&gt;...&lt;p&gt;... nesting). Newlines inside a code block
+ * become &lt;br&gt; rather than literal CR/LF: OneNote's HTML importer turns raw
+ * newlines inside &lt;pre&gt; into U+FFFC replacement characters.
  * @param {string} text - The plain text to convert
  * @returns {string} The HTML representation
  */
 export function textToHtml(text) {
   if (!text) return '';
 
-  // Security: Never bypass escaping, even if input looks like HTML
-  // All user input must be escaped to prevent XSS
+  // Security: never bypass escaping, even if input contains HTML-looking text.
+  const source = String(text).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  const codeBlocks = [];
 
-  let html = String(text) // Ensure text is a string
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;') // Basic HTML escaping first
-    .replace(/```([\s\S]*?)```/g, (match, code) => `<pre><code>${code.trim()}</code></pre>`)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
+  let html = source.replace(
+    /```(?:([a-zA-Z0-9_+-]+)\r?\n)?([\s\S]*?)```/g,
+    (match, language, code) => {
+      const index = codeBlocks.length;
+      // `language` is intentionally not emitted as an attribute; it is only
+      // consumed so the fence language is not rendered as the first code line.
+      const lines = code
+        .replace(/\r\n?/g, '\n')
+        .trim()
+        .split('\n')
+        .map((line) => escapeTextNode(line));
+      codeBlocks.push(`<pre><code>${lines.join('<br>')}</code></pre>`);
+      return `\n\u0000CODEBLOCK${index}\u0000\n`;
+    }
+  );
+
+  html = escapeTextNode(html);
+
+  // Block-level markdown. These are line-anchored and must run before inline
+  // rules so that list markers and heading prefixes survive.
+  html = html
     .replace(/^### (.+)$/gm, '<h3>$1</h3>')
     .replace(/^## (.+)$/gm, '<h2>$1</h2>')
     .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-    .replace(/__(.*?)__/g, '<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g, '<em>$1</em>')
-    .replace(/_(.*?)_/g, '<em>$1</em>')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, linkText, url) => {
-      const safeUrl = sanitizeUrl(url);
-      return `<a href="${safeUrl}">${linkText}</a>`;
-    })
     .replace(/^---+$/gm, '<hr>')
     .replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
     .replace(/^[*\-+] (.+)$/gm, '<li>$1</li>')
     .replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>');
+
+  html = applyInlineMarkdown(html);
 
   html = html
     .split('\n')
     .map((line) => {
       const trimmed = line.trim();
       if (!trimmed) return '';
-      if (
-        /^<(h[1-6]|li|hr|blockquote|pre|code|strong|em|a)/.test(trimmed) ||
-        /^<\/(h[1-6]|li|hr|blockquote|pre|code|strong|em|a)>/.test(trimmed)
-      ) {
-        return trimmed; // Already an HTML element we processed or a closing tag
+      if (CODE_BLOCK_TOKEN.test(trimmed) || BLOCK_TAG.test(trimmed)) {
+        return trimmed;
       }
       return `<p>${trimmed}</p>`;
     })
@@ -253,7 +400,7 @@ export function textToHtml(text) {
 
   html = html.replace(/(<li>.*?<\/li>(?:\s*<li>.*?<\/li>)*)/gs, '<ul>$1</ul>');
 
-  return html;
+  return html.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (match, index) => codeBlocks[Number(index)]);
 }
 
 /**

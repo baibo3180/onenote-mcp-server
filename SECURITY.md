@@ -47,6 +47,10 @@ project directory does not expose a usable token.
 - Revoke access at any time: <https://account.live.com/consent/Manage>, then
   delete `.access-token.txt`, `.auth-record.txt` and the OS-level MSAL cache.
 - `ONENOTE_MCP_DISABLE_CACHE_PERSISTENCE=1` keeps tokens in memory only.
+- Text sent to OneNote is HTML-escaped before it becomes page markup. Link URLs
+  are checked against an http(s)/mailto/onenote allowlist (including
+  control-character and character-reference obfuscation) and escaped for use
+  inside `href`, so note content cannot inject extra attributes or scripts.
 
 ## Reporting a vulnerability
 

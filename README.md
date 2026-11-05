@@ -17,16 +17,19 @@ plumbing so **you authenticate once per machine, not once per hour**.
 
 ## What this fork changes
 
-| Change                                                                   | Why it matters                                                                                                       |
-| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| Persistent MSAL cache actually enabled (`tokenCachePersistenceOptions`)  | Upstream passed a wrong field name and never registered the cache plugin, so the refresh token died with the process |
-| `AuthenticationRecord` persisted (AES-256-GCM) and reloaded on startup   | A brand-new process can renew silently instead of prompting for a device code                                        |
-| `createCredential()` is async and awaited                                | It used to pass an unresolved `Promise` as the account record → silent renewal broke                                 |
-| Stale cache-lock cleanup (30s threshold)                                 | A crash while holding MSAL's lock file used to degrade every later renewal into a device-code prompt                 |
-| Renewal credential is **silent-only** (`disableAutomaticAuthentication`) | On a fresh install the first tool call used to block for up to 15 minutes waiting for a login you never saw          |
-| Device-code prompt is forced to **stderr**                               | The SDK printed it to stdout, which corrupts the MCP JSON-RPC stream and makes the client report a hung server       |
-| `npm install` no longer runs `husky` via `prepare`                       | `npm install` failed outright in a folder without `.git` (e.g. ZIP download)                                         |
-| Troubleshooting docs for device-code loops and the OneNote freeze bug    | Saves hours of debugging                                                                                             |
+| Change                                                                        | Why it matters                                                                                                                   |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Persistent MSAL cache actually enabled (`tokenCachePersistenceOptions`)       | Upstream passed a wrong field name and never registered the cache plugin, so the refresh token died with the process             |
+| `AuthenticationRecord` persisted (AES-256-GCM) and reloaded on startup        | A brand-new process can renew silently instead of prompting for a device code                                                    |
+| `createCredential()` is async and awaited                                     | It used to pass an unresolved `Promise` as the account record → silent renewal broke                                             |
+| Stale cache-lock cleanup (30s threshold)                                      | A crash while holding MSAL's lock file used to degrade every later renewal into a device-code prompt                             |
+| Renewal credential is **silent-only** (`disableAutomaticAuthentication`)      | On a fresh install the first tool call used to block for up to 15 minutes waiting for a login you never saw                      |
+| Device-code prompt is forced to **stderr**                                    | The SDK printed it to stdout, which corrupts the MCP JSON-RPC stream and makes the client report a hung server                   |
+| `npm install` no longer runs `husky` via `prepare`                            | `npm install` failed outright in a folder without `.git` (e.g. ZIP download)                                                     |
+| Hardened Markdown→HTML conversion (attribute-escaped URLs, valid code blocks) | A crafted link URL could inject extra HTML attributes into a page; multi-line code fences produced `<p>` inside `<pre>`          |
+| Startup guards (`main().catch()` plus rejection/exception handlers)           | An unhandled promise rejection used to kill the stdio server before it answered `initialize`                                     |
+| Startup tool banner derived from live registrations                           | The old hand-written list showed 22 tools while the server actually exposes 25 (2 auth + 10 read + 7 edit + 5 create + 1 delete) |
+| Troubleshooting docs for device-code loops and the OneNote freeze bug         | Saves hours of debugging                                                                                                         |
 
 Measured on Windows 11 / Node 22: cold process, expired access token, 24
 concurrent renewals — zero prompts, and the refresh token rotates on disk each

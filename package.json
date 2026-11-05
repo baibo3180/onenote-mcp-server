@@ -1,6 +1,6 @@
 {
   "name": "onenote-mcp-server",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "An MCP server to interact with Microsoft OneNote, allowing LLMs to read, write, and edit notes. Fork with persistent, silently-renewing authentication.",
   "main": "src/server.mjs",
   "type": "module",
@@ -9,10 +9,11 @@
   },
   "scripts": {
     "start": "node src/server.mjs",
-    "test": "npm run test:unit && npm run test:smoke && npm run test:integration",
+    "test": "npm run test:unit && npm run test:smoke && npm run test:integration && npm run test:startup",
     "test:unit": "node --test test/test_unit.mjs test/test_tools.mjs",
     "test:smoke": "node test/test_smoke.mjs",
     "test:integration": "node test/test_integration.mjs",
+    "test:startup": "node --test test/test_startup.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write \"**/*.{js,mjs,json,md}\"",

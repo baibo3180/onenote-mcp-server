@@ -5,14 +5,17 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { JSDOM } from 'jsdom';
 import {
   escapeODataString,
   sanitizeUrl,
+  escapeHtmlAttribute,
   validateId,
   validateIsoDate,
   extractTextSummary,
   extractReadableText,
   textToHtml,
+  textToInlineHtml,
   Cache,
   validateCsvData,
 } from '../src/utils/common.mjs';
@@ -99,6 +102,44 @@ describe('sanitizeUrl', () => {
 
   test('should allow relative URLs without protocol', () => {
     assert.strictEqual(sanitizeUrl('/path/to/page'), '/path/to/page');
+  });
+
+  test('should block protocol-relative and backslash URLs', () => {
+    assert.strictEqual(sanitizeUrl('//evil.com/x'), '#');
+    assert.strictEqual(sanitizeUrl('\\\\evil.com\\x'), '#');
+    assert.strictEqual(sanitizeUrl('/\\evil.com'), '#');
+  });
+
+  test('should block schemes obfuscated with control characters', () => {
+    assert.strictEqual(sanitizeUrl('java\tscript:alert(1)'), '#');
+    assert.strictEqual(sanitizeUrl('java\nscript:alert(1)'), '#');
+  });
+
+  test('should block schemes obfuscated with character references', () => {
+    assert.strictEqual(sanitizeUrl('java&#115;cript:alert(1)'), '#');
+    assert.strictEqual(sanitizeUrl('javascript&colon;alert(1)'), '#');
+    assert.strictEqual(sanitizeUrl('java&#x73;cript:alert(1)'), '#');
+  });
+
+  test('should strip control characters from otherwise safe URLs', () => {
+    assert.strictEqual(sanitizeUrl('https://exa\nmple.com'), 'https://example.com');
+  });
+});
+
+describe('escapeHtmlAttribute', () => {
+  test('should escape quotes, backticks and HTML metacharacters', () => {
+    const escaped = escapeHtmlAttribute('a" onmouseover="alert(1) & <x> ` \'');
+    assert.strictEqual(escaped.includes('"'), false);
+    assert.strictEqual(escaped.includes('`'), false);
+    assert.strictEqual(escaped.includes('&quot;'), true);
+    assert.strictEqual(escaped.includes('&#39;'), true);
+    assert.strictEqual(escaped.includes('&lt;x&gt;'), true);
+  });
+
+  test('should drop control characters and handle empty values', () => {
+    assert.strictEqual(escapeHtmlAttribute('a\nb\tc'), 'abc');
+    assert.strictEqual(escapeHtmlAttribute(null), '');
+    assert.strictEqual(escapeHtmlAttribute(undefined), '');
   });
 });
 
@@ -468,6 +509,58 @@ describe('textToHtml', () => {
     assert.strictEqual(result.includes('<ul>'), true);
     assert.strictEqual(result.includes('<li>First</li>'), true);
     assert.strictEqual(result.includes('<li>Second</li>'), true);
+  });
+
+  test('should not allow a URL to inject extra href attributes', () => {
+    const result = textToHtml('[点我](https://example.com/" onmouseover="alert(1))');
+    assert.strictEqual(result.includes('&quot;'), true);
+    const anchor = new JSDOM(result).window.document.querySelector('a');
+    assert.ok(anchor, 'an anchor was produced');
+    assert.deepStrictEqual(
+      Array.from(anchor.attributes, (attr) => attr.name),
+      ['href']
+    );
+    assert.strictEqual(anchor.getAttribute('onmouseover'), null);
+    assert.strictEqual(anchor.getAttribute('href'), 'https://example.com/" onmouseover="alert(1');
+  });
+
+  test('should keep query-string ampersands intact inside href', () => {
+    const result = textToHtml('[Q](https://example.com/?a=1&b=2)');
+    assert.strictEqual(result.includes('href="https://example.com/?a=1&amp;b=2"'), true);
+  });
+
+  test('should not wrap code block lines in paragraphs', () => {
+    const result = textToHtml('```bash\nnpm ci\nnpm test\n```\nAfter');
+    assert.strictEqual(result.includes('<p>npm ci</p>'), false);
+    assert.strictEqual(result.includes('<pre><code>npm ci<br>npm test</code></pre>'), true);
+    assert.strictEqual(result.includes('<p>After</p>'), true);
+    assert.strictEqual(result.includes('bash'), false); // fence language is not code
+  });
+
+  test('should escape HTML inside code blocks', () => {
+    const result = textToHtml('```\n<script>alert(1)</script>\n```');
+    assert.strictEqual(result.includes('<script>'), false);
+    assert.strictEqual(result.includes('&lt;script&gt;'), true);
+  });
+
+  test('should not treat a placeholder forged in input as a code block', () => {
+    const result = textToHtml('\u0000CODEBLOCK0\u0000');
+    assert.strictEqual(result.includes('<pre>'), false);
+    assert.strictEqual(result.includes('CODEBLOCK0'), true);
+  });
+});
+
+describe('textToInlineHtml', () => {
+  test('should never add a paragraph wrapper', () => {
+    const result = textToInlineHtml('**Bold** title');
+    assert.strictEqual(result, '<strong>Bold</strong> title');
+  });
+
+  test('should escape HTML and sanitise link hrefs', () => {
+    const result = textToInlineHtml('[x](javascript:alert(1)) & <b>');
+    assert.strictEqual(result.includes('href="#"'), true);
+    assert.strictEqual(result.includes('<b>'), false);
+    assert.strictEqual(result.includes('&lt;b&gt;'), true);
   });
 });
 

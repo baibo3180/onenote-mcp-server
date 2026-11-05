@@ -2,7 +2,13 @@ import { z } from 'zod';
 import { JSDOM } from 'jsdom';
 import { createToolHandler } from '../api/retry.mjs';
 import { patchPageContent } from '../utils/validation.mjs';
-import { textToHtml, validateId, validateCsvData, escapeHtml } from '../utils/common.mjs';
+import {
+  textToHtml,
+  textToInlineHtml,
+  validateId,
+  validateCsvData,
+  escapeHtml,
+} from '../utils/common.mjs';
 import { fetchPageContentAdvanced } from '../utils/validation.mjs';
 import { HTTP_STATUS } from '../config/constants.mjs';
 import { logger } from '../utils/logger.mjs';
@@ -44,7 +50,7 @@ export function registerWriteTools(server, session) {
         logger.info(`Updating content for page: "${pageInfo.title}" (ID: ${validatedPageId})`);
 
         const htmlContentForUpdate = textToHtml(newContent);
-        const finalHtml = `<div>${preserveTitle ? `<h1>${textToHtml(pageInfo.title)}</h1>` : ''}${htmlContentForUpdate}<hr><p><em>Updated via OneNote MCP on ${new Date().toLocaleString()}</em></p></div>`;
+        const finalHtml = `<div>${preserveTitle ? `<h1>${textToInlineHtml(pageInfo.title)}</h1>` : ''}${htmlContentForUpdate}<hr><p><em>Updated via OneNote MCP on ${new Date().toLocaleString()}</em></p></div>`;
 
         await patchPageContent(
           session,
@@ -247,7 +253,7 @@ export function registerWriteTools(server, session) {
 
         const style = NOTE_STYLES[noteType] || NOTE_STYLES.note;
         const label = noteType.charAt(0).toUpperCase() + noteType.slice(1);
-        const noteHtml = `<div style="border-left: 4px solid ${style.borderColor}; background-color: ${style.color}; padding: 10px; margin: 10px 0;"><p><strong>${style.icon} ${label}</strong> - <em>${new Date().toLocaleString()}</em></p><p>${textToHtml(note)}</p></div>`;
+        const noteHtml = `<div style="border-left: 4px solid ${style.borderColor}; background-color: ${style.color}; padding: 10px; margin: 10px 0;"><p><strong>${style.icon} ${label}</strong> - <em>${new Date().toLocaleString()}</em></p>${textToHtml(note)}</div>`;
 
         const action = position === 'top' ? 'prepend' : 'append';
         await patchPageContent(
@@ -299,8 +305,8 @@ export function registerWriteTools(server, session) {
 
         const headerRow = rows[0];
         const dataRows = rows.slice(1);
-        let tableHtml = title ? `<h3>📊 ${textToHtml(title)}</h3>` : '';
-        tableHtml += `<table style="border-collapse: collapse; width: 100%; margin: 10px 0;"><thead><tr style="background-color: #f5f5f5;">${headerRow.map((cell) => `<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">${textToHtml(cell)}</th>`).join('')}</tr></thead><tbody>${dataRows.map((row) => `<tr>${row.map((cell) => `<td style="border: 1px solid #ddd; padding: 8px;">${textToHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+        let tableHtml = title ? `<h3>📊 ${textToInlineHtml(title)}</h3>` : '';
+        tableHtml += `<table style="border-collapse: collapse; width: 100%; margin: 10px 0;"><thead><tr style="background-color: #f5f5f5;">${headerRow.map((cell) => `<th style="border: 1px solid #ddd; padding: 8px; text-align: left;">${textToInlineHtml(cell)}</th>`).join('')}</tr></thead><tbody>${dataRows.map((row) => `<tr>${row.map((cell) => `<td style="border: 1px solid #ddd; padding: 8px;">${textToInlineHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
 
         const action = position === 'top' ? 'prepend' : 'append';
         await patchPageContent(
