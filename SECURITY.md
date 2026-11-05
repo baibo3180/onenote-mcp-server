@@ -30,6 +30,22 @@ Every credential file is listed in `.gitignore`. The encrypted token files hold
 ciphertext only: the key is not in the repository, so copying or zipping the
 project directory does not expose a usable token.
 
+## What this repository does NOT contain
+
+The public repository carries no host names, Windows account names, personal
+mailboxes, or OneDrive account IDs. All example paths use `<USERNAME>`, `~`, or
+`%LOCALAPPDATA%` placeholders. Commit authors use GitHub's
+`users.noreply.github.com` address, and `.gitignore` keeps the encrypted token
+and account-record files out of the tree.
+
+`test/test_privacy.mjs` runs as part of `npm test` (and therefore CI on Node
+20/22/24). It fails the build if a tracked file contains a hard-coded local user
+directory, a personal email address, a OneDrive account deep link, a GitHub
+token, or a private key. When contributing, replace machine-specific paths and
+addresses with placeholders instead of pasting your own. Note that your local
+`.auth-record.txt` does contain your Microsoft account name in encrypted form;
+it is never tracked, and the AES key lives outside the repo.
+
 ## Trust boundary
 
 - Tokens identify **your** Microsoft account. Nothing is shared between users of

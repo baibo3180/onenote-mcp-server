@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node src/server.mjs",
     "test": "npm run test:unit && npm run test:smoke && npm run test:integration && npm run test:startup",
-    "test:unit": "node --test test/test_unit.mjs test/test_tools.mjs",
+    "test:unit": "node --test test/test_unit.mjs test/test_tools.mjs test/test_privacy.mjs",
     "test:smoke": "node test/test_smoke.mjs",
     "test:integration": "node test/test_integration.mjs",
     "test:startup": "node --test test/test_startup.mjs",

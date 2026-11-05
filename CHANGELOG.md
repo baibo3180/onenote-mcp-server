@@ -2,6 +2,15 @@
 
 All notable changes to this fork are documented here.
 
+## Unreleased
+
+- **Privacy guard.** `test/test_privacy.mjs` now runs in `npm test` and CI. It
+  fails the build if a tracked file contains a hard-coded Windows user
+  directory, a personal mailbox, a OneDrive account deep link, a GitHub token,
+  or a private key. `SECURITY.md` documents that the public repository carries
+  no host names, account names, or personal addresses, and that the encrypted
+  local account record is never tracked.
+
 ## 1.1.5 — 2026-11-05
 
 Correctness and reliability fixes found while verifying user feedback. No
