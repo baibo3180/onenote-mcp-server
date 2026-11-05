@@ -33,9 +33,10 @@ const initializeRequest =
 /**
  * Spawns the real server, sends one initialize request and collects output.
  * @param {string[]} extraArgs - Extra Node arguments (e.g. --import hooks).
+ * @param {number} [settleAfterStdoutMs] - Extra time to collect stderr after the response.
  * @returns {Promise<{stdout: string, stderr: string, exitCode: number|null}>} Collected stdio output and exit status.
  */
-function probeServer(extraArgs = []) {
+function probeServer(extraArgs = [], settleAfterStdoutMs = 0) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [...extraArgs, serverPath], {
       cwd: repoRoot,
@@ -59,7 +60,10 @@ function probeServer(extraArgs = []) {
 
     child.stdout.on('data', (chunk) => {
       stdout += chunk;
-      if (stdout.includes('\n')) finish();
+      if (stdout.includes('\n')) {
+        // Give late stderr lines (e.g. an injected rejection log) time to land.
+        setTimeout(() => finish(), settleAfterStdoutMs);
+      }
     });
     child.stderr.on('data', (chunk) => {
       stderr += chunk;
@@ -75,13 +79,31 @@ function probeServer(extraArgs = []) {
 }
 
 /**
- * Creates a throwaway ESM module that raises an unhandled rejection.
+ * Creates a throwaway ESM module that raises an unhandled rejection once the
+ * server's own listeners are installed.
+ *
+ * Rejecting synchronously inside a --import preload is NOT a testable server
+ * scenario: on Node 20 that rejection is reported before the entry module
+ * graph is even fetched, so no application code can possibly have installed a
+ * listener yet. Polling listenerCount() waits for the real guard to be live,
+ * which is the situation the server can actually protect.
  * @returns {{dir: string, url: string}} Temp directory and --import URL.
  */
 function createRejectionHook() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'onenote-mcp-startup-'));
   const file = path.join(dir, 'reject-on-import.mjs');
-  fs.writeFileSync(file, "Promise.reject(new Error('injected-unhandled-rejection'));\n", 'utf8');
+  fs.writeFileSync(
+    file,
+    `const timer = setInterval(() => {
+  if (process.listenerCount('unhandledRejection') > 0) {
+    clearInterval(timer);
+    Promise.reject(new Error('injected-unhandled-rejection'));
+  }
+}, 1);
+setTimeout(() => clearInterval(timer), 5000).unref();
+`,
+    'utf8'
+  );
   return { dir, url: pathToFileURL(file).href };
 }
 
@@ -98,10 +120,10 @@ test('server answers initialize with a clean stdout JSON-RPC stream', async () =
   assert.match(stderr, /📚 Read \(10\)/);
 });
 
-test('an unhandled rejection during startup no longer kills the server', async () => {
+test('a stray unhandled rejection no longer kills the running server', async () => {
   const { dir, url } = createRejectionHook();
   try {
-    const { stdout, stderr } = await probeServer(['--import', url]);
+    const { stdout, stderr } = await probeServer(['--import', url], 400);
 
     const line = stdout.split('\n').find((candidate) => candidate.trim().startsWith('{'));
     assert.ok(line, `server died before answering initialize; stderr: ${stderr.slice(0, 400)}`);

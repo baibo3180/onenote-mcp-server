@@ -41,7 +41,11 @@ credential format changes: an existing login keeps working.
   tests for URL injection, code blocks and inline rendering.
 - `test/test_startup.mjs`: spawns the real server over raw stdio JSON-RPC and
   verifies both a clean `initialize` and survival of an injected unhandled
-  rejection. Wired into `npm test` (`test:startup`).
+  rejection. Wired into `npm test` (`test:startup`). The injection waits until
+  the server's listeners are installed: on Node 20 a rejection raised
+  synchronously inside a `--import` preload is reported before the entry module
+  graph is even fetched, so no application code can catch it. That is a Node
+  runtime ordering, not a server crash path.
 
 ### Docs
 
